@@ -1,0 +1,140 @@
+import pandas as pd
+import os
+import plotly.express as px
+ 
+# -------------------------------
+# Function to process defect CSV
+# -------------------------------
+def process_defect_data(file_path):
+    try:
+        # Step 1: Read file as raw lines to extract metadata
+        with open(file_path, "r", encoding="latin1") as f:
+            lines = [line.strip() for line in f if line.strip()]
+ 
+        # Step 2: Find header line
+        start_idx = None
+        for i, line in enumerate(lines):
+            if line.startswith("Defect;"):
+                start_idx = i
+                break
+        if start_idx is None:
+            raise ValueError("Could not find header line starting with 'Defect;'")
+ 
+        # Step 3: Extract metadata lines
+        metadata_lines = lines[:start_idx]
+ 
+        # Step 4: Extract COMMENT rows
+        comment_lines = [line for line in metadata_lines if line.startswith("COMMENT;")]
+ 
+        # Step 5: Read main defect table
+        df = pd.read_csv(file_path, sep=";", skiprows=start_idx, encoding="latin1",
+                         on_bad_lines='warn', engine='python')
+ 
+        # Step 6: Clean column names
+        df.columns = df.columns.str.strip().str.replace('"', '')
+ 
+        # Step 7: Add COMMENT info as separate columns
+        for i, comment in enumerate(comment_lines, 1):
+            comment_content = comment.split(";", 1)[1] if ";" in comment else comment
+            df[f'Comment_{i}'] = comment_content
+ 
+        # Step 8: Convert numeric columns
+        numeric_columns = [
+            'MD Position (m)', 'Position X (mm)', 'Position Y (mm)',
+            'Width (mm)', 'Height (mm)', 'Surface area (mm²)',
+            'Black contrast (gl)', 'Black surface area (mm²)',
+            'White Contrast (gl)', 'White Surface area (mm²)',
+            'Max White Contrast (gl)', 'Dynamic White Contrast (gl)',
+            'Max Black Contrast (gl)', 'Dynamic Black Contrast (gl)'
+        ]
+        for col in numeric_columns:
+            if col in df.columns:
+                df[col] = pd.to_numeric(df[col], errors='coerce')
+ 
+        # Step 9: Parse timestamp column
+        if 'Timestamp' in df.columns:
+            df['Timestamp'] = pd.to_datetime(df['Timestamp'], dayfirst=True, errors='coerce')
+ 
+        # Step 10: Ensure Status and Class are string
+        for col in ['Status', 'Class']:
+            if col in df.columns:
+                df[col] = df[col].astype(str)
+ 
+        return df, comment_lines
+ 
+    except Exception as e:
+        print(f"Error processing file: {e}")
+        raise
+ 
+# -------------------------------
+# Function to remove outliers
+# -------------------------------
+def remove_outliers(df, column):
+    Q1 = df[column].quantile(0.25)
+    Q3 = df[column].quantile(0.75)
+    IQR = Q3 - Q1
+    return df[(df[column] >= Q1 - 1.5 * IQR) & (df[column] <= Q3 + 1.5 * IQR)]
+ 
+# -------------------------------
+# Main code
+# -------------------------------
+file_path = r"X:\In-Core\Anode\C00\230002\C00-PCH-230002-A-09-04\Exported_2025_09_29_14_25_51_Inspected_2025_09_23_14_31_44\Export_defects_2025_09_29_14_25_51_2025_09_23_14_31_44.csv"
+ 
+if not os.path.exists(file_path):
+    raise FileNotFoundError(f"File not found: {file_path}")
+ 
+# Process CSV
+df_result, comment_lines = process_defect_data(file_path)
+ 
+# Combine comments for title
+comment_columns = [col for col in df_result.columns if col.startswith("Comment_")]
+comments_text = " | ".join(df_result[comment_columns].iloc[0].dropna().astype(str)) if comment_columns else ""
+ 
+# Remove outliers
+df_filtered = remove_outliers(df_result, 'Surface area (mm²)')
+ 
+# -------------------------------
+# Time vs Surface Area Plot
+# -------------------------------
+fig1 = px.scatter(
+    df_filtered,
+    x='Timestamp',
+    y='Surface area (mm²)',
+    color='Status' if 'Status' in df_filtered.columns else None,
+    symbol='Class' if 'Class' in df_filtered.columns else None,
+    hover_data=['Defect'] if 'Defect' in df_filtered.columns else None
+)
+fig1.update_layout(
+    title=f'Time vs Surface Area {comments_text}',
+    xaxis_title='Timestamp',
+    yaxis_title='Surface Area (mm²)',
+    legend_title='Status / Class'
+)
+fig1.show(renderer="browser")
+ 
+# -------------------------------
+# Bar Chart of Major vs Minor Defects
+# -------------------------------
+if 'Defect' in df_result.columns:
+    major_count = df_result['Defect'].str.lower().str.contains('major').sum()
+    minor_count = df_result['Defect'].str.lower().str.contains('minor').sum()
+ 
+    df_counts = pd.DataFrame({
+        'Defect Type': ['Major', 'Minor'],
+        'Count': [major_count, minor_count]
+    })
+ 
+    fig2 = px.bar(
+        df_counts,
+        x='Defect Type',
+        y='Count',
+        color='Defect Type',
+        text='Count',
+        title='Count of Major vs Minor Defects'
+    )
+    fig2.update_traces(textposition='outside')
+    fig2.show(renderer="browser")
+else:
+    print("Column 'Defect' not found for bar chart.")
+ 
+ 
