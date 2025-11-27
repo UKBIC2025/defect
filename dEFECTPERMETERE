@@ -1,0 +1,95 @@
+import pandas as pd
+import plotly.graph_objects as go
+import numpy as np
+
+# --- Load data ---
+file_path = r"C:\Users\Nivedidha.Kumaravelu\OneDrive - UKBIC LTD\Documents\defect.xlsx"
+df = pd.read_excel(file_path, sheet_name='C00-MIX-BUILD-A-01-05-Defect')
+df.columns = df.columns.str.strip()
+
+# --- Filter elements ---
+elements_of_interest = ['Inspection Coating Bottom 1', 'Inspection Coating Top 1']
+df = df[df['Element'].isin(elements_of_interest)].copy()
+
+# --- Convert Y to meters ---
+df['Y_m'] = df['Position Y (mm)'] / 1000
+
+# --- Filter surface area between 0.5 and 3 mm² ---
+df = df[(df['Surface area (mm²)'] >= 0.5) & (df['Surface area (mm²)'] <= 3)].copy()
+
+# --- Categorize surface area ---
+def surface_area_category(area):
+    if 0.5 <= area < 1:
+        return '0.5-1 mm²'
+    elif 1 <= area < 2:
+        return '1-2 mm²'
+    elif 2 <= area <= 3:
+        return '2-3 mm²'
+
+df['Surface Category'] = df['Surface area (mm²)'].apply(surface_area_category)
+
+# --- Color mapping ---
+color_map_small = {
+    '0.5-1 mm²': '#008B8B',  # Dark Cyan
+    '1-2 mm²': "#7000CC",    # Dark Purple
+    '2-3 mm²': '#8B008B'     # Dark Magenta
+}
+
+# --- Slit positions (5 positions → 4 zones) ---
+positions = {
+    'Slit Edge Trim 1': 480,
+    'Slit 1 (Blade Positions)': 416,
+    'Slit 2 (Blade Positions)': 352,
+    'Slit 3 (Blade Positions)': 288,
+    'Slit Edge Trim 2': 224
+}
+
+zones = [
+    {'name': 'Zone 4', 'x_min': positions['Slit 1 (Blade Positions)'], 'x_max': positions['Slit Edge Trim 1']},
+    {'name': 'Zone 3', 'x_min': positions['Slit 2 (Blade Positions)'], 'x_max': positions['Slit 1 (Blade Positions)']},
+    {'name': 'Zone 2', 'x_min': positions['Slit 3 (Blade Positions)'], 'x_max': positions['Slit 2 (Blade Positions)']},
+    {'name': 'Zone 1', 'x_min': positions['Slit Edge Trim 2'], 'x_max': positions['Slit 3 (Blade Positions)']}
+]
+
+# --- Define meter bins ---
+max_length = df['Y_m'].max()
+bins = np.arange(0, max_length + 1, 1)
+labels = [f"{int(i)}-{int(i+1)} m" for i in bins[:-1]]
+
+# --- Count defects per meter per zone and plot ---
+for zone in zones:
+    df_zone = df[(df['Position X (mm)'] >= zone['x_min']) & 
+                 (df['Position X (mm)'] < zone['x_max'])].copy()
+    
+    df_zone['Y_bin'] = pd.cut(df_zone['Y_m'], bins=bins, labels=labels, right=False)
+    
+    # --- Compute overall defect count per category for legend ---
+    total_counts = df_zone['Surface Category'].value_counts().to_dict()
+    
+    fig = go.Figure()
+    
+    # Plot stacked bars with counts in legend
+    for category, color in color_map_small.items():
+        counts = df_zone[df_zone['Surface Category'] == category].groupby('Y_bin').size()
+        # Remove bins with zero defects
+        counts = counts[counts > 0]
+        if not counts.empty:
+            legend_name = f"{category} (Total: {total_counts.get(category, 0)})"
+            fig.add_trace(go.Bar(
+                x=counts.index,
+                y=counts.values,
+                name=legend_name,
+                marker_color=color
+            ))
+    
+    fig.update_layout(
+        title=f'Defects per Meter - {zone["name"]} (0.5-3 mm²)',
+        xaxis_title='Roll Length (meters)',
+        yaxis_title='Number of Defects',
+        barmode='stack',
+        plot_bgcolor='white',
+        width=1000,
+        height=500
+    )
+    
+    fig.show()
