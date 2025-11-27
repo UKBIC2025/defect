@@ -1,0 +1,167 @@
+import pandas as pd
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+
+# --- Load data ---
+file_path = r"C:\Users\Nivedidha.Kumaravelu\OneDrive - UKBIC LTD\Documents\defect.xlsx"
+sheet_name = 'defect'
+df = pd.read_excel(file_path, sheet_name=sheet_name)
+df.columns = df.columns.str.strip()
+
+# --- Filter for specific elements ---
+elements_of_interest = ['Inspection Coating Bottom 1', 'Inspection Coating Top 1']
+df_filtered = df[df['Element'].isin(elements_of_interest)].copy()
+
+# --- Surface area categories ---
+def surface_area_category(area):
+    if 0.5 <= area < 1:
+        return '0.5-1 mm²'
+    elif 1 <= area < 2:
+        return '1-2 mm²'
+    elif 2 <= area <= 3:
+        return '2-3 mm²'
+    elif 3 < area <= 10:
+        return '3-10 mm²'
+    else:
+        return '≥10 mm²'
+
+df_filtered['Surface Category'] = df_filtered['Surface area (mm²)'].apply(surface_area_category)
+
+# --- Color mappings ---
+color_map_small = {
+    '0.5-1 mm²': '#008B8B',  # Dark Cyan
+    '1-2 mm²': "#7000CC",    # Dark Purple
+    '2-3 mm²': '#8B008B'     # Dark Magenta
+}
+
+color_map_large = {
+    '3-10 mm²': 'orange'
+}
+
+# --- Vertical line positions ---
+positions = {
+    'Edge Trim 1': 217,
+    'Edge Trim 2': 487,
+    'Slit Edge Trim 1': 480,
+    'Slit 1 (Blade Positions)': 416,
+    'Slit 2 (Blade Positions)': 352,
+    'Slit 3 (Blade Positions)': 288,
+    'Slit Edge Trim 2': 224,
+    'Coat Width Left': 492.5,
+    'Coat Width Right': 211.5
+}
+
+line_colors = {
+    'Edge Trim': 'red',
+    'Slit': 'green',
+    'Coat Width': 'blue'
+}
+
+# --- Create figure ---
+fig = make_subplots(
+    rows=1, cols=3,
+    column_widths=[0.35, 0.3, 0.35],
+    subplot_titles=("Defect Roll 0.5 - 3 mm²", "Defects per Slit Zone", "Defect Roll 3-10 mm²")
+)
+
+# --- Left: Defect Roll ≤3 mm² ---
+df_small = df_filtered[df_filtered['Surface Category'].isin(color_map_small.keys())]
+for category, color in color_map_small.items():
+    df_cat = df_small[df_small['Surface Category'] == category]
+    fig.add_trace(go.Scatter(
+        x=df_cat['Position X (mm)'],
+        y=df_cat['Position Y (mm)']/100,  # scale length in hundreds
+        mode='markers',
+        marker=dict(color=color, size=8),
+        name=f'Defect {category}',
+    ), row=1, col=1)
+
+# Add vertical lines to left plot
+for name, x in positions.items():
+    if 'Edge Trim' in name and 'Slit' not in name:
+        color = line_colors['Edge Trim']
+    elif 'Slit' in name:
+        color = line_colors['Slit']
+    elif 'Coat Width' in name:
+        color = line_colors['Coat Width']
+    else:
+        color = 'black'
+    fig.add_trace(go.Scatter(
+        x=[x, x],
+        y=[df_small['Position Y (mm)'].min()/100, df_small['Position Y (mm)'].max()/100],
+        mode='lines',
+        line=dict(color=color, width=2, dash='solid'),
+        showlegend=False
+    ), row=1, col=1)
+
+# --- Middle: Defects per zone between green lines ---
+# Extract green line positions
+slit_lines = {k: v for k, v in positions.items() if 'Slit' in k}
+# Sort by X descending (if X decreases left→right)
+slit_positions = sorted(slit_lines.values(), reverse=True)
+
+zone_counts = []
+zone_labels = []
+for i in range(len(slit_positions)-1):
+    x_start = min(slit_positions[i], slit_positions[i+1])
+    x_end = max(slit_positions[i], slit_positions[i+1])
+    count = df_small[(df_small['Position X (mm)'] >= x_start) & 
+                     (df_small['Position X (mm)'] < x_end)].shape[0]
+    zone_counts.append(count)
+    zone_labels.append(f"Zone {i+1}")
+
+fig.add_trace(go.Bar(
+    x=zone_labels,
+    y=zone_counts,
+    text=zone_counts,
+    textposition='auto',
+    marker_color='green',
+    name='Defects per Slit Zone'
+), row=1, col=2)
+
+# --- Right: Defect Roll >3 mm² ---
+df_large = df_filtered[df_filtered['Surface Category'].isin(color_map_large.keys())]
+for category, color in color_map_large.items():
+    df_cat = df_large[df_large['Surface Category'] == category]
+    fig.add_trace(go.Scatter(
+        x=df_cat['Position X (mm)'],
+        y=df_cat['Position Y (mm)']/100,
+        mode='markers',
+        marker=dict(color=color, size=8),
+        name=f'Defect {category}',
+    ), row=1, col=3)
+
+# Add vertical lines to right plot
+for name, x in positions.items():
+    if 'Edge Trim' in name and 'Slit' not in name:
+        color = line_colors['Edge Trim']
+    elif 'Slit' in name:
+        color = line_colors['Slit']
+    elif 'Coat Width' in name:
+        color = line_colors['Coat Width']
+    else:
+        color = 'black'
+    fig.add_trace(go.Scatter(
+        x=[x, x],
+        y=[df_large['Position Y (mm)'].min()/100, df_large['Position Y (mm)'].max()/100],
+        mode='lines',
+        line=dict(color=color, dash='dash', width=2),
+        showlegend=False
+    ), row=1, col=3)
+
+# --- Layout ---
+fig.update_layout(
+    title=dict(
+        text="Defect Roll - C00-MIX-BUILD-A-01-03<br><sub>Inspection Coating Top/Bottom 1</sub>",
+        x=0.5, xanchor='center'
+    ),
+    xaxis1_title='Width (mm)',
+    yaxis1_title='Length',
+    xaxis3_title='Width (mm)',
+    yaxis3_title='Length',
+    plot_bgcolor='white',
+    width=1300,
+    height=500
+)
+
+fig.show()
