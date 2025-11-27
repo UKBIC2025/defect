@@ -1,18 +1,74 @@
 import pandas as pd
+import os
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
-# --- Load data ---
-file_path = r"C:\Users\Nivedidha.Kumaravelu\OneDrive - UKBIC LTD\Documents\defect.xlsx"
-sheet_name = 'defect'
-df = pd.read_excel(file_path, sheet_name=sheet_name)
+# -------------------------------
+# Function to process defect CSV
+# -------------------------------
+def process_defect_data(file_path):
+    with open(file_path, "r", encoding="latin1") as f:
+        lines = [line.strip() for line in f if line.strip()]
+    
+    # Find header line
+    start_idx = next((i for i, line in enumerate(lines) if line.startswith("Defect;")), None)
+    if start_idx is None:
+        raise ValueError("Could not find header line starting with 'Defect;'")
+    
+    # Extract COMMENT rows
+    metadata_lines = lines[:start_idx]
+    comment_lines = [line for line in metadata_lines if line.startswith("COMMENT;")]
+
+    # Read main defect table
+    df = pd.read_csv(file_path, sep=";", skiprows=start_idx, encoding="latin1",
+                     on_bad_lines='warn', engine='python')
+    df.columns = df.columns.str.strip().str.replace('"', '')
+    
+    # Add COMMENT info as separate columns
+    for i, comment in enumerate(comment_lines, 1):
+        comment_content = comment.split(";", 1)[1] if ";" in comment else comment
+        df[f'Comment_{i}'] = comment_content
+    
+    # Convert numeric columns
+    numeric_columns = ['MD Position (m)', 'Position X (mm)', 'Position Y (mm)',
+                       'Width (mm)', 'Height (mm)', 'Surface area (mm²)',
+                       'Black contrast (gl)', 'Black surface area (mm²)',
+                       'White Contrast (gl)', 'White Surface area (mm²)',
+                       'Max White Contrast (gl)', 'Dynamic White Contrast (gl)',
+                       'Max Black Contrast (gl)', 'Dynamic Black Contrast (gl)']
+    for col in numeric_columns:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors='coerce')
+    
+    # Parse timestamp
+    if 'Timestamp' in df.columns:
+        df['Timestamp'] = pd.to_datetime(df['Timestamp'], dayfirst=True, errors='coerce')
+    
+    # Ensure Status and Class are string
+    for col in ['Status', 'Class']:
+        if col in df.columns:
+            df[col] = df[col].astype(str)
+    
+    return df, comment_lines
+
+# -------------------------------
+# File path
+# -------------------------------
+file_path = r"X:\In-Core\Cathode\C00\C00- CYL-MK2-MIX18\Exports__2025_11_27_09_39_59_2025_11_26_14_36_50\Export_defects_2025_11_27_09_39_59_2025_11_26_14_36_50.csv"
+if not os.path.exists(file_path):
+    raise FileNotFoundError(f"File not found: {file_path}")
+
+# -------------------------------
+# Process CSV
+# -------------------------------
+df, comment_lines = process_defect_data(file_path)
 df.columns = df.columns.str.strip()
 
-# --- Filter for specific elements ---
+# Filter for elements of interest (as in Excel example)
 elements_of_interest = ['Inspection Coating Bottom 1', 'Inspection Coating Top 1']
 df_filtered = df[df['Element'].isin(elements_of_interest)].copy()
 
-# --- Surface area categories ---
+# Categorize surface area
 def surface_area_category(area):
     if 0.5 <= area < 1:
         return '0.5-1 mm²'
@@ -27,56 +83,41 @@ def surface_area_category(area):
 
 df_filtered['Surface Category'] = df_filtered['Surface area (mm²)'].apply(surface_area_category)
 
-# --- Color mappings ---
-color_map_small = {
-    '0.5-1 mm²': '#008B8B',  # Dark Cyan
-    '1-2 mm²': "#7000CC",    # Dark Purple
-    '2-3 mm²': '#8B008B'     # Dark Magenta
-}
+# Color maps
+color_map_small = {'0.5-1 mm²': '#008B8B', '1-2 mm²': "#7000CC", '2-3 mm²': '#8B008B'}
+color_map_large = {'3-10 mm²': 'orange'}
 
-color_map_large = {
-    '3-10 mm²': 'orange'
-}
-
-# --- Vertical line positions ---
+# Vertical line positions
 positions = {
-    'Edge Trim 1': 217,
-    'Edge Trim 2': 487,
-    'Slit Edge Trim 1': 480,
-    'Slit 1 (Blade Positions)': 416,
-    'Slit 2 (Blade Positions)': 352,
-    'Slit 3 (Blade Positions)': 288,
-    'Slit Edge Trim 2': 224,
-    'Coat Width Left': 492.5,
-    'Coat Width Right': 211.5
+    'Edge Trim 1': 217, 'Edge Trim 2': 487,
+    'Slit Edge Trim 1': 480, 'Slit 1 (Blade Positions)': 416,
+    'Slit 2 (Blade Positions)': 352, 'Slit 3 (Blade Positions)': 288,
+    'Slit Edge Trim 2': 224, 'Coat Width Left': 492.5, 'Coat Width Right': 211.5
 }
+line_colors = {'Edge Trim': 'red', 'Slit': 'green', 'Coat Width': 'blue'}
 
-line_colors = {
-    'Edge Trim': 'red',
-    'Slit': 'green',
-    'Coat Width': 'blue'
-}
-
-# --- Create figure ---
+# -------------------------------
+# Create figure
+# -------------------------------
 fig = make_subplots(
     rows=1, cols=3,
     column_widths=[0.35, 0.3, 0.35],
     subplot_titles=("Defect Roll 0.5 - 3 mm²", "Defects per Slit Zone", "Defect Roll 3-10 mm²")
 )
 
-# --- Left: Defect Roll ≤3 mm² ---
+# Left: Small defects
 df_small = df_filtered[df_filtered['Surface Category'].isin(color_map_small.keys())]
 for category, color in color_map_small.items():
     df_cat = df_small[df_small['Surface Category'] == category]
     fig.add_trace(go.Scatter(
         x=df_cat['Position X (mm)'],
-        y=df_cat['Position Y (mm)']/100,  # scale length in hundreds
+        y=df_cat['Position Y (mm)']/100,
         mode='markers',
         marker=dict(color=color, size=8),
-        name=f'Defect {category}',
+        name=f'Defect {category}'
     ), row=1, col=1)
 
-# Add vertical lines to left plot
+# Vertical lines left
 for name, x in positions.items():
     if 'Edge Trim' in name and 'Slit' not in name:
         color = line_colors['Edge Trim']
@@ -94,19 +135,12 @@ for name, x in positions.items():
         showlegend=False
     ), row=1, col=1)
 
-# --- Middle: Defects per zone between green lines ---
-# Extract green line positions
-slit_lines = {k: v for k, v in positions.items() if 'Slit' in k}
-# Sort by X descending (if X decreases left→right)
-slit_positions = sorted(slit_lines.values(), reverse=True)
-
-zone_counts = []
-zone_labels = []
+# Middle: Defects per zone
+slit_positions = sorted({k: v for k, v in positions.items() if 'Slit' in k}.values(), reverse=True)
+zone_counts, zone_labels = [], []
 for i in range(len(slit_positions)-1):
-    x_start = min(slit_positions[i], slit_positions[i+1])
-    x_end = max(slit_positions[i], slit_positions[i+1])
-    count = df_small[(df_small['Position X (mm)'] >= x_start) & 
-                     (df_small['Position X (mm)'] < x_end)].shape[0]
+    x_start, x_end = min(slit_positions[i], slit_positions[i+1]), max(slit_positions[i], slit_positions[i+1])
+    count = df_small[(df_small['Position X (mm)'] >= x_start) & (df_small['Position X (mm)'] < x_end)].shape[0]
     zone_counts.append(count)
     zone_labels.append(f"Zone {i+1}")
 
@@ -119,7 +153,7 @@ fig.add_trace(go.Bar(
     name='Defects per Slit Zone'
 ), row=1, col=2)
 
-# --- Right: Defect Roll >3 mm² ---
+# Right: Large defects
 df_large = df_filtered[df_filtered['Surface Category'].isin(color_map_large.keys())]
 for category, color in color_map_large.items():
     df_cat = df_large[df_large['Surface Category'] == category]
@@ -128,10 +162,10 @@ for category, color in color_map_large.items():
         y=df_cat['Position Y (mm)']/100,
         mode='markers',
         marker=dict(color=color, size=8),
-        name=f'Defect {category}',
+        name=f'Defect {category}'
     ), row=1, col=3)
 
-# Add vertical lines to right plot
+# Vertical lines right
 for name, x in positions.items():
     if 'Edge Trim' in name and 'Slit' not in name:
         color = line_colors['Edge Trim']
@@ -145,23 +179,20 @@ for name, x in positions.items():
         x=[x, x],
         y=[df_large['Position Y (mm)'].min()/100, df_large['Position Y (mm)'].max()/100],
         mode='lines',
-        line=dict(color=color, dash='dash', width=2),
+        line=dict(color=color, width=2, dash='dash'),
         showlegend=False
     ), row=1, col=3)
 
-# --- Layout ---
+# Layout
 fig.update_layout(
     title=dict(
-        text="Defect Roll - C00-MIX-BUILD-A-01-03<br><sub>Inspection Coating Top/Bottom 1</sub>",
+        text="Defect Roll <br><sub>Inspection Coating Top/Bottom 1</sub>",
         x=0.5, xanchor='center'
     ),
-    xaxis1_title='Width (mm)',
-    yaxis1_title='Length',
-    xaxis3_title='Width (mm)',
-    yaxis3_title='Length',
+    xaxis1_title='Width (mm)', yaxis1_title='Length',
+    xaxis3_title='Width (mm)', yaxis3_title='Length',
     plot_bgcolor='white',
-    width=1300,
-    height=500
+    width=1300, height=500
 )
 
 fig.show()
